@@ -71,8 +71,7 @@ class GNN_Pack(nn.Module):
         conv_model = self.build_conv_model(model_type=args.conv_type, edge_dim=1)
         self.convs = nn.ModuleList()
 
-        if args.skip == "learnable":
-            self.learnable_skip = nn.Parameter(torch.ones(self.n_layers, self.n_layers))
+        self.learnable_skip = nn.Parameter(torch.ones(self.n_layers, self.n_layers))
 
         for l in range(args.n_layers):
             if args.skip == "all" or args.skip == "learnable":

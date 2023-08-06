@@ -10,7 +10,6 @@ def parse_encoder(parser, arg_str=None):
     enc_parser.add_argument("--hidden_dim", type=int, help="Training hidden size")
     enc_parser.add_argument("--input_dim", type=int, help="Training hidden size")
 
-    enc_parser.add_argument("--skip", type=str, help='"all" or "last"')
     enc_parser.add_argument("--dropout", type=float, help="Dropout rate")
     enc_parser.add_argument(
         "--n_batches", type=int, help="Number of training minibatches"
@@ -54,7 +53,6 @@ def parse_encoder(parser, arg_str=None):
         n_layers=2,
         batch_size=32,
         hidden_dim=64,
-        skip="learnable",
         dropout=0.1,
         n_batches=500000,
         opt="adam",  # opt_enc_parser

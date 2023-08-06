@@ -12,7 +12,6 @@
  "n_layers": 2,
  "hidden_dim": 64,
  "input_dim": 2,
- "skip": "learnable",
  "dropout": 0.1,
  "n_batches": 500000,
  "margin": 0.1,
