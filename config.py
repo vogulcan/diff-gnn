@@ -34,7 +34,9 @@ def parse_encoder(parser, arg_str=None):
         "--eval_interval", type=int, help="how often to eval during training"
     )
     enc_parser.add_argument("--val_size", type=int, help="validation set size")
-    enc_parser.add_argument("--model_save_dir", type=str, help="path to directory for save/load model")
+    enc_parser.add_argument(
+        "--model_save_dir", type=str, help="path to directory for save/load model"
+    )
     enc_parser.add_argument("--opt_scheduler", type=str, help="scheduler name")
 
     enc_parser.add_argument(

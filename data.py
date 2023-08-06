@@ -10,6 +10,7 @@ import tqdm
 
 import sys
 
+
 class _hic(InMemoryDataset):
     def __init__(self, root, data_list=None, transform=None):
         self.data_list = data_list
@@ -24,14 +25,14 @@ class _hic(InMemoryDataset):
         torch.save(self.collate(self.data_list), self.processed_paths[0])
 
 
-def load_dataset(dataset_path, split = 0.8):
+def load_dataset(dataset_path, split=0.8):
     dataset = _hic(root=dataset_path)
 
     train, test = [], []
     dataset = list(dataset)
     random.shuffle(dataset)
 
-    train_len = int(split * len(dataset)) # 80% train, 20% test
+    train_len = int(split * len(dataset))  # 80% train, 20% test
     return dataset[:train_len], dataset[train_len:]
 
 
@@ -50,7 +51,11 @@ class DataSource:
 
     def gen_batch(self, a, train=True):
         batch_size = a
-        min_size, max_size_q, max_size_t = self.min_size, self.max_size_Q, self.max_size_T 
+        min_size, max_size_q, max_size_t = (
+            self.min_size,
+            self.max_size_Q,
+            self.max_size_T,
+        )
         edge_margin = self.edge_margin
 
         train_set, test_set = self.dataset

@@ -109,7 +109,7 @@ class GNN_Pack(nn.Module):
             print("unrecognized model type")
 
     def forward(self, x, edge_index, e, batch, edge_mask=None):
-        #x, e, edge_index, batch = data.x, data.edge_attr, data.edge_index, data.batch
+        # x, e, edge_index, batch = data.x, data.edge_attr, data.edge_index, data.batch
         x = self.pre_mp(x)
         all_emb = x.unsqueeze(1)
         emb = x
@@ -118,7 +118,9 @@ class GNN_Pack(nn.Module):
             curr_emb = all_emb * torch.sigmoid(skip_vals)
             curr_emb = curr_emb.view(x.size(0), -1)
             if edge_mask is not None:
-                x = self.convs[i](curr_emb, edge_index, edge_attr=e * edge_mask.view(-1, 1))
+                x = self.convs[i](
+                    curr_emb, edge_index, edge_attr=e * edge_mask.view(-1, 1)
+                )
             else:
                 x = self.convs[i](curr_emb, edge_index, edge_attr=e)
             x = F.relu(x)

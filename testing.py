@@ -5,6 +5,7 @@ from sklearn.metrics import roc_auc_score, confusion_matrix
 from sklearn.metrics import precision_recall_curve, average_precision_score
 import torch
 
+
 def validation(args, model, test_pts, logger, batch_n, epoch, verbose=False):
     # test on new motifs
     model.eval()
@@ -17,9 +18,13 @@ def validation(args, model, test_pts, logger, batch_n, epoch, verbose=False):
 
         with torch.no_grad():
             if as_:
-                emb_as_= model.emb_model(as_.x, as_.edge_index, as_.edge_attr, as_.batch)
-                emb_bs_ = model.emb_model(bs_.x, bs_.edge_index, bs_.edge_attr, bs_.batch)
-            
+                emb_as_ = model.emb_model(
+                    as_.x, as_.edge_index, as_.edge_attr, as_.batch
+                )
+                emb_bs_ = model.emb_model(
+                    bs_.x, bs_.edge_index, bs_.edge_attr, bs_.batch
+                )
+
             pred = model(emb_as_, emb_bs_)
             raw_pred = model.predict(pred)
 
@@ -78,7 +83,6 @@ def validation(args, model, test_pts, logger, batch_n, epoch, verbose=False):
         logger.add_scalar("TN/test", tn, batch_n)
         logger.add_scalar("FP/test", fp, batch_n)
         logger.add_scalar("FN/test", fn, batch_n)
-        
+
         print(f"Saving ckpt to {args.model_path}")
         torch.save(model.state_dict(), args.model_path)
-        

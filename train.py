@@ -18,7 +18,9 @@ from testing import validation
 from config import parse_encoder
 
 from torch_geometric import seed_everything
+
 seed_everything(0)
+
 
 def build_model(args):
     model = models.Embedder(args.input_dim, args.hidden_dim, args)
@@ -62,9 +64,9 @@ def train(args, model, logger, in_queue, out_queue):
                 out_queue.put(("step", (-1, -1)))
                 continue
 
-            emb_as_= model.emb_model(as_.x, as_.edge_index, as_.edge_attr, as_.batch)
+            emb_as_ = model.emb_model(as_.x, as_.edge_index, as_.edge_attr, as_.batch)
             emb_bs_ = model.emb_model(bs_.x, bs_.edge_index, bs_.edge_attr, bs_.batch)
-            
+
             pred = model(emb_as_, emb_bs_)
             loss = model.criterion(pred, labels)
             loss.backward()
@@ -94,9 +96,9 @@ def train_loop(args):
     print(vars(args), flush=True)
 
     if args.tag != "":
-        os.makedirs(args.model_save_dir, exist_ok = True) 
+        os.makedirs(args.model_save_dir, exist_ok=True)
         args.model_path = f"{args.model_save_dir}/tag_{args.tag}.ckpt"
-        
+
         with open(f"{args.model_path}.args.json", "w") as file:
             json.dump(vars(args), file, indent=1)
     else:
@@ -138,11 +140,9 @@ def train_loop(args):
         batch_n = 0
         for epoch in range(args.n_batches // args.eval_interval):
             for i in range(args.eval_interval):
-                
                 in_queue.put(("step", None))
 
             for i in range(args.eval_interval):
-                
                 msg, params = out_queue.get()
                 train_loss, train_acc, local_lr = params
 
@@ -153,8 +153,9 @@ def train_loop(args):
                 batch_n += 1
 
             validation(args, model, test_pts, logger, batch_n, epoch)
-    
+
     print("Done training.", flush=True)
+
 
 def main(test=False):
     mp.set_start_method("spawn", force=True)
