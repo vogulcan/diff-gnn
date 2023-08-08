@@ -2,3 +2,5 @@
 /datasets
 /runs
 /test-explain
+/checkpoints
+/analyze
