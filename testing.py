@@ -6,8 +6,7 @@ from sklearn.metrics import precision_recall_curve, average_precision_score
 import torch
 
 
-def validation(args, model, test_pts, logger, batch_n, epoch, verbose=False):
-    # test on new motifs
+def validation(args, model, test_pts, logger, batch_n, epoch):
     model.eval()
     all_raw_preds, all_preds, all_labels = [], [], []
     for as_, bs_, labels in test_pts:
@@ -29,13 +28,15 @@ def validation(args, model, test_pts, logger, batch_n, epoch, verbose=False):
             raw_pred = model.predict(pred)
 
             pred = model.clf_model(raw_pred.unsqueeze(1)).argmax(dim=-1)
+            pred = pred.cpu()
+            raw_pred = raw_pred.cpu()
             raw_pred *= -1
 
         all_raw_preds.append(raw_pred)
         all_preds.append(pred)
         all_labels.append(labels)
     pred = torch.cat(all_preds, dim=-1)
-    labels = torch.cat(all_labels, dim=-1)
+    labels = torch.cat(all_labels, dim=-1).cpu()
     raw_pred = torch.cat(all_raw_preds, dim=-1)
     acc = torch.mean((pred == labels).type(torch.float))
     prec = (
@@ -54,15 +55,17 @@ def validation(args, model, test_pts, logger, batch_n, epoch, verbose=False):
     auroc = roc_auc_score(labels, raw_pred)
     avg_prec = average_precision_score(labels, raw_pred)
     tn, fp, fn, tp = confusion_matrix(labels, pred).ravel()
-    if verbose:
-        import matplotlib.pyplot as plt
+    
+    # if verbose:
+    #     import matplotlib.pyplot as plt
 
-        precs, recalls, threshs = precision_recall_curve(labels, raw_pred)
-        plt.plot(recalls, precs)
-        plt.xlabel("Recall")
-        plt.ylabel("Precision")
-        plt.savefig("plots/precision-recall-curve.png")
-        print("Saved PR curve plot in plots/precision-recall-curve.png")
+    #     precs, recalls, threshs = precision_recall_curve(labels, raw_pred)
+    #     plt.plot(recalls, precs)
+    #     plt.xlabel("Recall")
+    #     plt.ylabel("Precision")
+    #     plot_path = f"plots/precision-recall-curve-tag{args.tag}.png"
+    #     plt.savefig(plot_path)
+    #     print(f"Saved PR curve plot in {plot_path}")
 
     print("\n{}".format(str(datetime.now())))
     print(

@@ -264,13 +264,14 @@ def choose_graph(graphs):
         ).to_undirected().copy()
     """
 
-    graph = to_networkx(
-        random.choice(graphs),
-        to_undirected=True,
-        node_attrs=["x"],
-        edge_attrs=["edge_attr"],
-    )
-    return graph
+    # graph = to_networkx(
+    #     random.choice(graphs),
+    #     to_undirected=True,
+    #     node_attrs=["x"],
+    #     edge_attrs=["edge_attr"],
+    # )
+
+    return random.choice(graphs)
 
 
 def sample_neigh(graph, size):
@@ -477,4 +478,4 @@ def synthesize_graphs(graphs, cat, n, min_size, max_size_Q, max_size_T, margin):
                 flush=True,
             )
 
-    return a_, b_
+    return a_, b_, cat

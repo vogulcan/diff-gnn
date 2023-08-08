@@ -17,10 +17,6 @@ import utils
 from testing import validation
 from config import parse_encoder
 
-from torch_geometric import seed_everything
-
-seed_everything(0)
-
 
 def build_model(args):
     model = models.Embedder(args.input_dim, args.hidden_dim, args)
@@ -43,13 +39,13 @@ def train(args, model, logger, in_queue, out_queue):
     while not done:
         local_epoch += 1
 
-        data_source = data.DataSource(args)
+        data_source = data.DataSource(args, train=True)
 
         loaders = data_source.gen_data_loaders(
             args.eval_interval * args.batch_size, args.batch_size
         )
 
-        for batch_target, _, _ in zip(*loaders):
+        for batch_target in loaders:
             msg, _ = in_queue.get()
             if msg == "done":
                 done = True
@@ -86,8 +82,6 @@ def train(args, model, logger, in_queue, out_queue):
 
             pred = pred.argmax(dim=-1)
             acc = torch.mean((pred == labels).type(torch.float))
-            train_loss = loss.item()
-            train_acc = acc.item()
 
             out_queue.put(("step", (loss.item(), acc, scheduler.get_last_lr()[0])))
 
@@ -111,16 +105,15 @@ def train_loop(args):
     model = build_model(args)
     model.share_memory()
 
-    clf_opt = optim.Adam(model.clf_model.parameters(), lr=args.lr)
-
-    data_source = data.DataSource(args, test_points=True)
+    data_source = data.DataSource(args, train=False)
     loaders = data_source.gen_data_loaders(
         args.val_size,
         args.batch_size,
     )
 
+    print("Generating test points...", flush=True)
     test_pts = []
-    for batch_target, _, _ in zip(*loaders):
+    for batch_target in tqdm.tqdm(loaders, total=len(loaders)):
         as_, bs_, labels = data_source.gen_batch(batch_target, train=False)
         if as_:
             as_ = as_.to(torch.device("cpu"))
@@ -135,8 +128,9 @@ def train_loop(args):
         workers.append(worker)
 
     if args.test:
-        validation(args, model, test_pts, logger, 0, 0, verbose=True)
+        validation(args, model, test_pts, logger, 0, 0)
     else:
+        print("Starting training...", flush=True)   
         batch_n = 0
         for epoch in range(args.n_batches // args.eval_interval):
             for i in range(args.eval_interval):
@@ -153,8 +147,7 @@ def train_loop(args):
                 batch_n += 1
 
             validation(args, model, test_pts, logger, batch_n, epoch)
-
-    print("Done training.", flush=True)
+        print("Done training.", flush=True)
 
 
 def main(test=False):

@@ -26,7 +26,6 @@ def parse_encoder(parser, arg_str=None):
         type=float,
         help="Number of graphs sampled from dataset to create a smaller dataset at each eval interval",
     )
-
     enc_parser.add_argument("--dataset", type=str, help="Dataset")
     enc_parser.add_argument("--test_set", type=str, help="test set filename")
     enc_parser.add_argument(
@@ -37,12 +36,6 @@ def parse_encoder(parser, arg_str=None):
         "--model_save_dir", type=str, help="path to directory for save/load model"
     )
     enc_parser.add_argument("--opt_scheduler", type=str, help="scheduler name")
-
-    enc_parser.add_argument(
-        "--use_curriculum",
-        action="store_true",
-        help="whether to use curriculum in training",
-    )
     enc_parser.add_argument("--test", action="store_true")
     enc_parser.add_argument("--n_workers", type=int)
     enc_parser.add_argument("--tag", type=str, help="tag to identify the run")
@@ -50,10 +43,10 @@ def parse_encoder(parser, arg_str=None):
     enc_parser.set_defaults(
         conv_type="GINE",
         dataset="/home/carlos/Desktop/projects/diff-gnn/datasets/hic_4DNFIBM9QCFG_nMax51_nMin31_perc10",
-        n_layers=2,
-        batch_size=32,
-        hidden_dim=64,
-        dropout=0.1,
+        n_layers=3,
+        batch_size=24,
+        hidden_dim=128,
+        dropout=0.0,
         n_batches=500000,
         opt="adam",  # opt_enc_parser
         opt_scheduler="cos",
@@ -63,10 +56,10 @@ def parse_encoder(parser, arg_str=None):
         margin=0.1,
         test_set="",
         eval_interval=5000,
-        n_workers=8,
+        n_workers=4,
         model_save_dir="./checkpoints",
         tag="",
-        val_size=4096,
+        val_size=1024,
         min_size=31,
         max_size_Q=41,
         max_size_T=51,

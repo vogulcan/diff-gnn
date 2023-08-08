@@ -4,6 +4,7 @@ import torch
 from torch_geometric.data import InMemoryDataset
 import torch_geometric.utils as pyg_utils
 from torch_geometric.data import Batch
+from torch_geometric.utils import to_networkx
 
 import random
 import tqdm
@@ -25,20 +26,35 @@ class _hic(InMemoryDataset):
         torch.save(self.collate(self.data_list), self.processed_paths[0])
 
 
-def load_dataset(dataset_path, split=0.8):
+def load_dataset(dataset_path, sampling_size=1000, train_step=False, split=0.8):
     dataset = _hic(root=dataset_path)
 
     train, test = [], []
     dataset = list(dataset)
     random.shuffle(dataset)
+    if train_step:
+        dataset = dataset[:sampling_size]
 
     train_len = int(split * len(dataset))  # 80% train, 20% test
-    return dataset[:train_len], dataset[train_len:]
+
+    print("Loading dataset...")
+    for graph in tqdm.tqdm(dataset, total=len(dataset)):
+        graph = to_networkx(
+            graph,
+            to_undirected=True,
+            node_attrs=["x"],
+            edge_attrs=["edge_attr"],
+        )
+        if len(train) < train_len:
+            train.append(graph)
+        else:
+            test.append(graph)
+    return train, test
 
 
 class DataSource:
-    def __init__(self, args, test_points=False):
-        self.dataset = load_dataset(args.dataset)
+    def __init__(self, args, train=True):
+        self.dataset = load_dataset(args.dataset, train_step=train)
         self.min_size = args.min_size
         self.max_size_Q = args.max_size_Q
         self.max_size_T = args.max_size_T
@@ -46,8 +62,7 @@ class DataSource:
         self.edge_margin = args.edge_margin
 
     def gen_data_loaders(self, size, batch_size):
-        loaders = [[batch_size] * (size // batch_size) for i in range(3)]
-        return loaders
+        return [batch_size] * (size // batch_size)
 
     def gen_batch(self, a, train=True):
         batch_size = a

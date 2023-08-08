@@ -1,114 +1,107 @@
 import utils
 
-from math import sqrt
-
-import torch
-from torch.nn.parameter import Parameter
-
 import networkx as nx
 from matplotlib import pyplot as plt
 
-
-class explainer:
-    """
-    GNNExplainer implementation from PyTorch Geometric - only for edge mask training
+from torch_geometric.utils import to_networkx
+import numpy as np
 
 
-    For more info:
-        https://pytorch-geometric.readthedocs.io/en/latest/_modules/torch_geometric/explain/algorithm/gnn_explainer.html#GNNExplainer
-
-    and
-
-    edge_mask in models.emb_model.forward()
-
-    """
-
-    coeffs = {
-        "edge_size": 0.005,
-        "edge_reduction": "sum",
-        "edge_ent": 1.0,
-        "EPS": 1e-15,
-    }
-
-    def __init__(self, model, q_data):
-        self.model = model
-        self.query_data = q_data
-        self.edge_mask = self._set_edge_mask(q_data)
-        self.hard_edge_mask = None
-
-    def _set_edge_mask(self, q_data):
-        (N, F), E = q_data.x.size(), q_data.edge_index.size(1)
-        std = torch.nn.init.calculate_gain("relu") * sqrt(2.0 / (2 * N))
-        edge_mask = Parameter(torch.randn(E, device=utils.get_device()) * std)
-        return edge_mask.to(utils.get_device())
-
-    def _loss(self, pred, label):
-        loss_f = torch.nn.NLLLoss()
-        loss = loss_f(pred, label)
-        if self.hard_edge_mask is not None:
-            assert self.edge_mask is not None
-            m = self.edge_mask[self.hard_edge_mask].sigmoid()
-            edge_reduce = getattr(torch, self.coeffs["edge_reduction"])
-            loss = loss + self.coeffs["edge_size"] * edge_reduce(m)
-            ent = -m * torch.log(m + self.coeffs["EPS"]) - (1 - m) * torch.log(
-                1 - m + self.coeffs["EPS"]
-            )
-            loss = loss + self.coeffs["edge_ent"] * ent.mean()
-
-        return loss
-
-    def train_edge_masks(self, model, bs_, emb_as_, epoch=200):
-        Parameters = [self.edge_mask]
-        optimizer = torch.optim.Adam(Parameters, lr=0.01)
-        label = torch.tensor([0], device=utils.get_device())
-
-        model.train()
-
-        for i in range(epoch):
-            optimizer.zero_grad()
-            curr_b = model.emb_model(
-                bs_.x,
-                bs_.edge_index,
-                bs_.edge_attr,
-                bs_.batch,
-                edge_mask=self.edge_mask.sigmoid(),
-            )
-            with torch.no_grad():
-                pred = model.predict((emb_as_, curr_b))
-
-            pred = model.clf_model(pred.unsqueeze(1))
-            loss = self._loss(pred, label)
-            loss.backward()
-
-            if i == 0 and self.edge_mask is not None:
-                self.hard_edge_mask = self.edge_mask.grad != 0.0
-
-        return self.edge_mask.sigmoid()
-
-
-def visualize_edges(G, anchor=25):
+def visualize_edges(G, ax=None, anchor=25):
     widths = nx.get_edge_attributes(G, "edge_attr")
     for k, v in widths.items():
         widths[k] = v * 100
 
     nodelist = G.nodes
     node_color = ["red" if n == anchor else "blue" for n in nodelist]
-    plt.figure(figsize=(12, 8))
-
+    print(nodelist)
     pos = nx.shell_layout(G)
     nx.draw_networkx_nodes(
-        G, pos, nodelist=nodelist, node_size=1500, node_color=node_color, alpha=0.7
+        G,
+        pos,
+        nodelist=nodelist,
+        node_size=1500,
+        node_color=node_color,
+        alpha=0.7,
+        ax=ax,
     )
     nx.draw_networkx_edges(
         G,
         pos,
         edgelist=widths.keys(),
         width=list(widths.values()),
-        edge_color="lightblue",
+        edge_color="green",
         alpha=0.6,
+        ax=ax,
     )
     nx.draw_networkx_labels(
-        G, pos=pos, labels=dict(zip(nodelist, nodelist)), font_color="white"
+        G, pos=pos, labels=dict(zip(nodelist, nodelist)), font_color="white", ax=ax
     )
-    plt.box(False)
-    plt.show()
+
+    # plt.show()
+
+
+def node_diff(t, q):
+    t = t.to_directed() if not nx.is_directed(t) else t
+    q = q.to_directed() if not nx.is_directed(q) else q
+    return set(t.nodes()) - set(q.nodes()), set(q.nodes()) - set(t.nodes())
+
+
+def edge_comp(t, q, q_max=41, t_max=51):
+    t = t.to_directed() if not nx.is_directed(t) else t
+    q = q.to_directed() if not nx.is_directed(q) else q
+    t_copy = t.copy()
+
+    n, _ = utils.uniq_nodes(q_max, t_max)
+    t_copy.remove_nodes_from(n)
+
+    t_spec = set(t_copy.edges()) - set(q.edges())
+    t_spec_dict = dict()
+    for edge in t_spec:
+        t_spec_dict.update({edge: t_copy.edges[edge]["edge_attr"]})
+
+    q_spec_dict = dict()
+    q_spec = set(q.edges()) - set(t_copy.edges())
+    for edge in q_spec:
+        q_spec_dict.update({edge: q.edges[edge]["edge_attr"]})
+
+    intersection = list(set(t_copy.edges).intersection(q.edges()))
+    intersection_dict = dict()
+    for edge in intersection:
+        intersection_dict.update(
+            {edge: t_copy.edges[edge]["edge_attr"] - q.edges[edge]["edge_attr"]}
+        )
+
+    return t_spec_dict, q_spec_dict, intersection_dict
+
+
+def viz_attrs(edge_diff_dict, margin=0.15, anchor=None):
+    checked = []
+    vals = []
+    return_dict = dict()
+    for edge in edge_diff_dict:
+        val = edge_diff_dict[edge]
+        if np.abs(val) >= margin and set(edge) not in checked:
+            if anchor is not None:
+                if anchor in edge:
+                    vals.append(val)
+                    return_dict.update({edge: val})
+            else:
+                vals.append(val)
+                return_dict.update({edge: val})
+            checked.append(set(edge))
+
+    return vals, return_dict
+
+
+def apply_threshold(b, edge_mask, perc):
+    threshold = np.percentile(edge_mask, perc)
+
+    preserved_edges = b.edge_index.numpy()[:, np.where(edge_mask >= threshold)[0]]
+    preserved_edges = [(int(edge[0]), int(edge[1])) for edge in preserved_edges.T]
+
+    G_b = to_networkx(b, to_undirected=True, node_attrs=["x"], edge_attrs=["edge_attr"])
+    drop_edges = [edge for edge in G_b.edges() if edge not in preserved_edges]
+    G_b.remove_edges_from(drop_edges)
+
+    return G_b
