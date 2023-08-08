@@ -11,6 +11,7 @@ import tqdm
 
 import sys
 
+import multiprocessing as py_mp
 
 class _hic(InMemoryDataset):
     def __init__(self, root, data_list=None, transform=None):
@@ -79,9 +80,10 @@ class DataSource:
         categorical_div = [4, 4, 8, 8, 8, 8]
         a_graphs = []
         b_graphs = []
+        
 
         for category_Id, div in enumerate(categorical_div):
-            as_, bs_ = utils.synthesize_graphs(
+            as_, bs_, _ = utils.synthesize_graphs(
                 graphs,
                 category_Id,
                 batch_size // div,
