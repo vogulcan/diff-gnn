@@ -1,11 +1,14 @@
 import utils
-import networkx as nx
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric.nn as pyg_nn
 
+# pl module
+from torchmetrics import Accuracy
+from utils import build_optimizer
+import torch.optim as optim
+import pytorch_lightning as pl
 
 class Embedder(nn.Module):
     def __init__(self, input_dim, hidden_dim, args):
@@ -58,8 +61,6 @@ class Embedder(nn.Module):
         relation_loss = torch.sum(e)
 
         return relation_loss
-
-
 class GNN_Pack(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, args):
         super(GNN_Pack, self).__init__()
@@ -131,8 +132,6 @@ class GNN_Pack(nn.Module):
 
     def loss(self, pred, label):
         return F.nll_loss(pred, label)
-
-
 class model2explainer(nn.Module):
     def __init__(self, model, b, target_emb):
         super(model2explainer, self).__init__()
@@ -149,14 +148,10 @@ class model2explainer(nn.Module):
             val = pred.item()
         pred = self.model.clf_model(pred.unsqueeze(1))
         return pred, val
-
-
 from torch_geometric.explain import Explainer, GNNExplainer, Explanation
 from torch_geometric.explain.algorithm.utils import clear_masks, set_masks
 from torch import Tensor
 from typing import Optional, Tuple, Union
-
-
 class explainer(GNNExplainer):
     coeffs = {
         "edge_size": 0.005,
@@ -216,7 +211,7 @@ class explainer(GNNExplainer):
             self.losses.append(loss.item())
             print(val)
             vals.append(val)
-            
+
             last = vals[-1]
             prev = vals[-2] if len(vals) > 1 else last
             if i > 0 and last > prev:
@@ -266,3 +261,116 @@ class explainer(GNNExplainer):
         self._clean_model(model)
 
         return Explanation(node_mask=node_mask, edge_mask=edge_mask)
+
+class pl_model(pl.LightningModule):
+    def __init__(
+        self,
+        args,
+    ):
+        super().__init__()
+        self.args = args
+        input_dim = args.input_dim
+        hidden_dim = args.hidden_dim
+
+        self.margin = args.margin
+        
+        self.automatic_optimization=False
+
+        self.emb_model = GNN_Pack(input_dim, hidden_dim, hidden_dim, args)
+        self.clf_model = nn.Sequential(nn.Linear(1, 2), nn.LogSoftmax(dim=-1))
+
+        self.train_acc = Accuracy(task="multiclass", num_classes=2)
+        self.val_acc = Accuracy(task="multiclass", num_classes=2)
+        self.test_acc = Accuracy(task="multiclass", num_classes=2)
+
+    def predict(self, pred):
+        emb_as, emb_bs = pred
+
+        e = torch.sum(
+            torch.max(torch.zeros_like(emb_as, device=emb_as.device), emb_bs - emb_as)
+            ** 2,
+            dim=1,
+        )
+        return e
+
+    def criterion(self, pred, labels):
+        emb_as, emb_bs = pred
+        e = torch.sum(
+            torch.max(
+                torch.zeros_like(emb_as, device=utils.get_device()), emb_bs - emb_as
+            )
+            ** 2,
+            dim=1,
+        )
+
+        margin = self.margin
+        e[labels == 0] = torch.max(
+            torch.tensor(0.0, device=utils.get_device()), margin - e
+        )[labels == 0]
+
+        relation_loss = torch.sum(e)
+
+        return relation_loss
+
+    def forward(self, emb_as, emb_bs):
+        return emb_as, emb_bs
+
+    def training_step(self, data, batch_idx):
+        emb_opt, clf_opt = self.optimizers()        
+        emb_opt.zero_grad()
+        scheduler = self.lr_schedulers()
+        
+        data = [i.squeeze(0) for i in data]
+        emb_as = self.emb_model(data[0], data[1], data[2], data[3])
+        emb_bs = self.emb_model(data[4], data[5], data[6], data[7])
+        
+        labels_per_group = self.args.batch_size // 2
+        labels = torch.tensor([1] * labels_per_group + [0] * labels_per_group).to(utils.get_device())
+
+        pred = self(emb_as, emb_bs)
+        loss = self.criterion(pred, labels)
+        self.manual_backward(loss)
+        torch.nn.utils.clip_grad_norm_(self.emb_model.parameters(), 1.0)
+        emb_opt.step()
+        scheduler.step()
+        with torch.no_grad():
+            pred = self.predict(pred)
+        self.clf_model.zero_grad()
+        clf_opt.zero_grad()
+        pred = self.clf_model(pred.unsqueeze(1))
+        criterion = nn.NLLLoss()
+        clf_loss = criterion(pred, labels)
+        self.manual_backward(clf_loss)
+        clf_opt.step()
+
+        pred = pred.argmax(dim=1)
+        self.train_acc(pred, labels)
+        self.log("train_acc", self.train_acc, prog_bar=True, on_step=True, on_epoch=True)
+
+    def _shared_step(self, data):
+        data = [i.squeeze(0) for i in data]
+        emb_as = self.emb_model(data[0], data[1], data[2], data[3])
+        emb_bs = self.emb_model(data[4], data[5], data[6], data[7])
+        labels_per_group = self.args.batch_size // 2
+        labels = torch.tensor([1] * labels_per_group + [0] * labels_per_group).to(utils.get_device())
+        pred = self.predict(self(emb_as, emb_bs))
+        pred = self.clf_model(pred.unsqueeze(1))
+        pred = pred.argmax(dim=1)
+        return pred, labels
+        
+    def validation_step(self, data, batch_idx):
+        pred, labels = self._shared_step(data)
+        self.val_acc(pred, labels)
+        self.log("val_acc", self.val_acc, prog_bar=True, on_step=True, on_epoch=True)
+        return
+    
+    def test_step(self, data, batch_idx):    
+        pred, labels = self._shared_step(data)
+        self.test_acc(pred, labels)
+        self.log("test_acc", self.test_acc, prog_bar=True, on_step=True, on_epoch=True)
+        return
+
+    def configure_optimizers(self):
+        scheduler, emb_opt = build_optimizer(self.args, self.emb_model.parameters())
+        clf_opt = optim.Adam(self.clf_model.parameters(), lr=self.args.lr)
+        return [emb_opt, clf_opt], [scheduler]

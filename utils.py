@@ -264,14 +264,14 @@ def choose_graph(graphs):
         ).to_undirected().copy()
     """
 
-    # graph = to_networkx(
-    #     random.choice(graphs),
-    #     to_undirected=True,
-    #     node_attrs=["x"],
-    #     edge_attrs=["edge_attr"],
-    # )
-
-    return random.choice(graphs)
+    graph = to_networkx(
+        random.choice(graphs),
+        to_undirected=True,
+        node_attrs=["x"],
+        edge_attrs=["edge_attr"],
+    )
+    return graph
+    # return random.choice(graphs)
 
 
 def sample_neigh(graph, size):

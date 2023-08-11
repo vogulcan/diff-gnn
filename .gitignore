@@ -4,3 +4,6 @@
 /test-explain
 /checkpoints
 /analyze
+/lightning_logs
+/logs
+/checkpoints
