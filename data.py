@@ -6,13 +6,11 @@ from pytorch_lightning import LightningDataModule
 from torch_geometric.data import InMemoryDataset, Batch
 
 import argparse
+import tqdm
+
 
 class _hic_dataset_torch(Dataset):
-    def __init__(
-        self,
-        pyg_dataset: InMemoryDataset,
-        args
-    ):
+    def __init__(self, pyg_dataset, args, state="train"):
         self.dataset = pyg_dataset
         self.batch_size = args.batch_size
         self.transform = None
@@ -21,11 +19,26 @@ class _hic_dataset_torch(Dataset):
         self.max_size_T = args.max_size_T
         self.edge_margin = args.edge_margin
 
+        self.state = state
+
+        if self.state in ["test", "val"]:
+            n_step = vars(args)[f"steps_per_{state}"]
+            self.dataset = [
+                self.gen_batch()
+                for i in tqdm.tqdm(
+                    range(n_step), desc=f"Generating {state} data", total=n_step
+                )
+            ]
+
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        a_batch, b_batch = self.gen_batch()
+        if self.state in ["test", "val"]:
+            a_batch, b_batch = self.dataset[idx]
+        elif self.state == "train":
+            a_batch, b_batch = self.gen_batch()
+
         a_x, a_edge_index, a_edge_attr, a_batch = (
             a_batch.x,
             a_batch.edge_index,
@@ -38,7 +51,16 @@ class _hic_dataset_torch(Dataset):
             b_batch.edge_attr,
             b_batch.batch,
         )
-        return a_x, a_edge_index, a_edge_attr, a_batch, b_x, b_edge_index, b_edge_attr, b_batch
+        return (
+            a_x,
+            a_edge_index,
+            a_edge_attr,
+            a_batch,
+            b_x,
+            b_edge_index,
+            b_edge_attr,
+            b_batch,
+        )
 
     def gen_batch(self):
         batch_size, min_size, max_size_q, max_size_t, edge_margin = (
@@ -104,30 +126,52 @@ class _hic_dataset_pyg(InMemoryDataset):
 
 
 class _hic_datamodule_pl(LightningDataModule):
-    def __init__(self, args: argparse.Namespace = None, steps_per_epoch = None):
+    def __init__(self, args: argparse.Namespace = None, steps_per_epoch=None):
         super().__init__()
         dataset = _hic_dataset_pyg(root=args.dataset).shuffle()
-        self.test_dataset = _hic_dataset_torch(dataset[: len(dataset) // 10], args)
-        self.val_dataset = _hic_dataset_torch(
-            dataset[len(dataset) // 10 : 2 * len(dataset) // 10], args
+        self.test_dataset = _hic_dataset_torch(
+            dataset[: len(dataset) // 10], args, state="test"
         )
-        self.train_dataset = _hic_dataset_torch(dataset[2 * len(dataset) // 10 :], args)
-        
+        self.val_dataset = _hic_dataset_torch(
+            dataset[len(dataset) // 10 : 2 * len(dataset) // 10], args, state="val"
+        )
+        self.train_dataset = _hic_dataset_torch(
+            dataset[2 * len(dataset) // 10 :], args, state="train"
+        )
+
         self.batch_size = args.batch_size
         self.DataLoader_batch_size = 1
         self.num_workers = args.n_workers
         self.steps_per_epoch = steps_per_epoch
 
     def train_dataloader(self):
-        return self._dl_wrapper(DataLoader(self.train_dataset, batch_size=self.DataLoader_batch_size, shuffle=False, num_workers=self.num_workers), n_steps=self.steps_per_epoch['train'])
+        return self._dl_wrapper(
+            DataLoader(
+                self.train_dataset,
+                batch_size=self.DataLoader_batch_size,
+                shuffle=False,
+                num_workers=self.num_workers,
+            ),
+            n_steps=self.steps_per_epoch["train"],
+        )
 
     def val_dataloader(self):
-        return self._dl_wrapper(DataLoader(self.val_dataset, batch_size=self.DataLoader_batch_size, shuffle=False, num_workers=self.num_workers), n_steps=self.steps_per_epoch['val'])
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.DataLoader_batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+        )
 
     def test_dataloader(self):
-        return self._dl_wrapper(DataLoader(self.test_dataset, batch_size=self.DataLoader_batch_size, shuffle=False, num_workers=self.num_workers), n_steps=self.steps_per_epoch['test'])
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.DataLoader_batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+        )
 
-    class _dl_wrapper():
+    class _dl_wrapper:
         def __init__(self, data_loader, n_steps):
             self.step = n_steps
             self.idx = 0
@@ -135,10 +179,10 @@ class _hic_datamodule_pl(LightningDataModule):
 
         def __iter__(self):
             return self
-        
+
         def __len__(self):
             return self.step
-        
+
         def __next__(self):
             if self.idx == self.step:
                 self.idx = 0
@@ -150,4 +194,3 @@ class _hic_datamodule_pl(LightningDataModule):
             except StopIteration:
                 self.iter_loader = iter(self.loader)
                 return next(self.iter_loader)
-        
