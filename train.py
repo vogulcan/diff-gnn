@@ -8,12 +8,16 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 
-torch.set_float32_matmul_precision("medium")
+#torch.set_float32_matmul_precision("high")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     config.parse_encoder(parser)
     args = parser.parse_args()
+
+    devices = torch.cuda.device_count()
+    if devices > args.n_devices:
+        exit(f"Too many devices avaiable than requested: {devices} > {args.n_devices}")
 
     step_dict = {
         "train": args.steps_per_train,
@@ -23,13 +27,12 @@ if __name__ == "__main__":
 
     datamodule = data._hic_datamodule_pl(args, steps_per_epoch=step_dict)
 
-    devices = torch.cuda.device_count()
     strategy = pl.strategies.DDPStrategy(accelerator="gpu", find_unused_parameters=True)
 
     tb_logger = TensorBoardLogger(save_dir=args.save_path, name=f"tag{args.tag}")
 
     checkpoint = pl.callbacks.ModelCheckpoint(
-        monitor="val_acc", save_top_k=1, mode="max"
+        monitor="val_acc", save_top_k=10, mode="max", save_last=True, filename="{epoch}-{val_acc:.4f}"
     )
     trainer = pl.Trainer(
         strategy=strategy,

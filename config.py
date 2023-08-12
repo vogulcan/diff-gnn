@@ -52,6 +52,7 @@ def parse_encoder(parser, arg_str=None):
     )
 
     enc_parser.add_argument("--n_workers", type=int)
+    enc_parser.add_argument("--n_devices", type=int)
     enc_parser.add_argument("--tag", type=str, help="tag to identify the run")
     enc_parser.add_argument(
         "--save_path", type=str, help="path to save the model/run info"
@@ -81,6 +82,7 @@ def parse_encoder(parser, arg_str=None):
         weight_decay=0.0,
         lr=1e-3,
         n_workers=4,
+        n_devices=1,
         save_path="./experiments",
         tag=None,
         edge_margin=0.15,

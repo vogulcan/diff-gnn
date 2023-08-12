@@ -6,7 +6,7 @@ import torch_geometric.nn as pyg_nn
 
 # pl module
 from torchmetrics import Accuracy
-from torchmetrics.classification import BinaryAUROC, BinaryConfusionMatrix
+from sklearn.metrics import roc_auc_score, confusion_matrix, average_precision_score
 from utils import build_optimizer
 import torch.optim as optim
 import pytorch_lightning as pl
@@ -34,11 +34,9 @@ class pl_model(pl.LightningModule):
 
         self.train_acc = Accuracy(task="multiclass", num_classes=2)
         self.val_acc = Accuracy(task="multiclass", num_classes=2)
-        self.val_auroc = BinaryAUROC()
-        self.val_confusion_matrix = BinaryConfusionMatrix()
-        self.test_acc = Accuracy(task="multiclass", num_classes=2)
-        self.test_auroc = BinaryAUROC()
-        self.test_confusion_matrix = BinaryConfusionMatrix()
+
+        self.validation_step_outputs = {"pred": [], "raw_pred": [], "labels": []}
+        self.test_step_outputs = {"pred": [], "raw_pred": [], "labels": []}
 
     def predict(self, pred):
         emb_as, emb_bs = pred
@@ -88,6 +86,7 @@ class pl_model(pl.LightningModule):
 
         pred = self(emb_as, emb_bs)
         loss = self.criterion(pred, labels)
+
         self.manual_backward(loss)
         torch.nn.utils.clip_grad_norm_(self.emb_model.parameters(), 1.0)
         emb_opt.step()
@@ -106,52 +105,74 @@ class pl_model(pl.LightningModule):
         self.log(
             "train_acc", self.train_acc, prog_bar=True, on_step=True, on_epoch=True
         )
+        self.logger.experiment.add_scalar(f'train_loss', loss.item(), self.global_step)
 
     def _shared_step(self, data):
         data = [i.squeeze(0) for i in data]
+
         emb_as = self.emb_model(data[0], data[1], data[2], data[3])
         emb_bs = self.emb_model(data[4], data[5], data[6], data[7])
         labels_per_group = self.args.batch_size // 2
         labels = torch.tensor([1] * labels_per_group + [0] * labels_per_group).to(
             utils.get_device()
         )
-        pred = self.predict(self(emb_as, emb_bs))
-        pred = self.clf_model(pred.unsqueeze(1))
-        return pred.argmax(dim=1), labels
+        raw_pred = self.predict(self(emb_as, emb_bs))
+        pred = self.clf_model(raw_pred.unsqueeze(1)).argmax(dim=-1)
+        return pred, raw_pred*-1, labels
 
     def validation_step(self, data, batch_idx):
-        pred, labels = self._shared_step(data)
-        self.val_acc(pred, labels)
-        self.log("val_acc", self.val_acc, prog_bar=True, on_step=True, on_epoch=True)
-        self.val_auroc(pred, labels)
-        self.log(
-            "val_auroc", self.val_auroc, prog_bar=True, on_step=True, on_epoch=True
-        )
-        self.val_confusion_matrix(pred, labels)
-        self.log(
-            "val_confusion_matrix",
-            self.val_confusion_matrix,
-            prog_bar=True,
-            on_step=True,
-            on_epoch=True,
-        )
+        pred, raw_pred, labels = self._shared_step(data)
+        self.validation_step_outputs["pred"].append(pred.cpu())
+        self.validation_step_outputs["raw_pred"].append(raw_pred.cpu())
+        self.validation_step_outputs["labels"].append(labels.cpu())
 
     def test_step(self, data, batch_idx):
-        pred, labels = self._shared_step(data)
-        self.test_acc(pred, labels)
-        self.log("test_acc", self.test_acc, prog_bar=True, on_step=True, on_epoch=True)
-        self.test_auroc(pred, labels)
-        self.log(
-            "test_auroc", self.test_auroc, prog_bar=True, on_step=True, on_epoch=True
+        pred, raw_pred, labels = self._shared_step(data)
+        self.test_step_outputs["pred"].append(pred.cpu())
+        self.test_step_outputs["raw_pred"].append(raw_pred.cpu())
+        self.test_step_outputs["labels"].append(labels.cpu())
+
+    def _shared_compute_metrics(self, outputs, state):
+        pred = torch.cat(outputs['pred'], dim=-1)
+        labels = torch.cat(outputs['labels'], dim=-1)
+        raw_pred = torch.cat(outputs['raw_pred'], dim=-1)
+        
+        if state == 'val':
+            self.val_acc(pred, labels)
+            self.log("val_acc", self.val_acc, prog_bar=True, on_step=False, on_epoch=True)
+            acc = self.val_acc.compute()
+        else:
+            acc = torch.mean((pred == labels).type(torch.float))
+        
+        prec = (
+        torch.sum(pred * labels).item() / torch.sum(pred).item()
+        if torch.sum(pred) > 0
+        else float("NaN")
         )
-        self.test_confusion_matrix(pred, labels)
-        self.log(
-            "test_confusion_matrix",
-            self.test_confusion_matrix,
-            prog_bar=True,
-            on_step=True,
-            on_epoch=True,
+        recall = (
+            torch.sum(pred * labels).item() / torch.sum(labels).item()
+            if torch.sum(labels) > 0
+            else float("NaN")
         )
+        auroc = roc_auc_score(labels, raw_pred)
+        avg_prec = average_precision_score(labels, raw_pred)
+        tn, fp, fn, tp = confusion_matrix(labels, pred).ravel()
+
+        metrics = {'acc': acc, 'prec': prec, 'recall': recall, 'auroc': auroc, 'avg_prec': avg_prec, 'tn': tn, 'fp': fp, 'fn': fn, 'tp': tp}
+        
+        for k, v in metrics.items():
+            if k == "val_acc":
+                continue
+            else:
+                self.logger.experiment.add_scalar(f'{state}_{k}', v, self.current_epoch)
+
+    def on_validation_epoch_end(self):
+        self._shared_compute_metrics(self.validation_step_outputs, 'val')
+        self.validation_step_outputs = {"pred": [], "raw_pred": [], "labels": []}
+    
+    def on_test_epoch_end(self):
+        self._shared_compute_metrics(self.test_step_outputs, 'test')
+        self.test_step_outputs = {"pred": [], "raw_pred": [], "labels": []}
 
     def configure_optimizers(self):
         scheduler, emb_opt = build_optimizer(self.args, self.emb_model.parameters())
@@ -202,7 +223,6 @@ class GNN_Pack(nn.Module):
             print("unrecognized model type")
 
     def forward(self, x, edge_index, e, batch, edge_mask=None):
-        # x, e, edge_index, batch = data.x, data.edge_attr, data.edge_index, data.batch
         x = self.pre_mp(x)
         all_emb = x.unsqueeze(1)
         emb = x
@@ -227,6 +247,3 @@ class GNN_Pack(nn.Module):
         # emb = self.batch_norm(emb)   # TODO: test
         # out = F.log_softmax(emb, dim=1)
         return emb
-
-    def loss(self, pred, label):
-        return F.nll_loss(pred, label)
