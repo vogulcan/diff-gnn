@@ -19,13 +19,7 @@ if __name__ == "__main__":
     if devices > args.n_devices:
         exit(f"Too many devices avaiable than requested: {devices} > {args.n_devices}")
 
-    step_dict = {
-        "train": args.steps_per_train,
-        "val": args.steps_per_val,
-        "test": args.steps_per_test,
-    }
-
-    datamodule = data._hic_datamodule_pl(args, steps_per_epoch=step_dict)
+    datamodule = data._hic_datamodule_pl(args)
 
     strategy = pl.strategies.DDPStrategy(accelerator="gpu", find_unused_parameters=True)
 
@@ -34,13 +28,22 @@ if __name__ == "__main__":
     checkpoint = pl.callbacks.ModelCheckpoint(
         monitor="val_acc", save_top_k=10, mode="max", save_last=True, filename="{epoch}-{val_acc:.4f}"
     )
+
+    plugins = []
+    if args.env == "slurm":
+        from pytorch_lightning.plugins.environments import SLURMEnvironment
+        import signal
+        plugins.append(SLURMEnvironment(requeue_signal=signal.SIGHUP))
+
     trainer = pl.Trainer(
         strategy=strategy,
         devices=devices,
+        num_nodes=args.n_nodes,
         max_epochs=args.n_epoch,
         logger=tb_logger,
         log_every_n_steps=5,
         callbacks=[checkpoint],
+        plugins=plugins,
     )
 
     model = models.pl_model(args)

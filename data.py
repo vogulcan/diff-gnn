@@ -7,7 +7,7 @@ from torch_geometric.data import InMemoryDataset, Batch
 
 import argparse
 import tqdm
-
+import sys
 
 class _hic_dataset_torch(Dataset):
     def __init__(self, pyg_dataset, args, state="train"):
@@ -19,6 +19,8 @@ class _hic_dataset_torch(Dataset):
         self.max_size_T = args.max_size_T
         self.edge_margin = args.edge_margin
 
+        self.args = args
+
         self.state = state
 
         if self.state in ["test", "val"]:
@@ -26,12 +28,15 @@ class _hic_dataset_torch(Dataset):
             self.dataset = [
                 self.gen_batch()
                 for i in tqdm.tqdm(
-                    range(n_step), desc=f"Generating {state} data", total=n_step
+                    range(n_step), desc=f"Generating {state} data", total=n_step, file=sys.stdout
                 )
             ]
 
     def __len__(self):
-        return len(self.dataset)
+        if self.state in ["test", "val"]:
+            return len(self.dataset)
+        else:
+            return self.args.steps_per_train
 
     def __getitem__(self, idx):
         if self.state in ["test", "val"]:
@@ -126,7 +131,7 @@ class _hic_dataset_pyg(InMemoryDataset):
 
 
 class _hic_datamodule_pl(LightningDataModule):
-    def __init__(self, args: argparse.Namespace = None, steps_per_epoch=None):
+    def __init__(self, args: argparse.Namespace):
         super().__init__()
         dataset = _hic_dataset_pyg(root=args.dataset).shuffle()
         self.test_dataset = _hic_dataset_torch(
@@ -140,25 +145,19 @@ class _hic_datamodule_pl(LightningDataModule):
         )
 
         self.batch_size = args.batch_size
-        self.DataLoader_batch_size = 1
         self.num_workers = args.n_workers
-        self.steps_per_epoch = steps_per_epoch
+        self.args = args 
 
     def train_dataloader(self):
-        return self._dl_wrapper(
-            DataLoader(
-                self.train_dataset,
-                batch_size=self.DataLoader_batch_size,
-                shuffle=False,
-                num_workers=self.num_workers,
-            ),
-            n_steps=self.steps_per_epoch["train"],
+        return DataLoader(
+            self.train_dataset,
+            shuffle=False,
+            num_workers=self.num_workers,
         )
 
     def val_dataloader(self):
         return DataLoader(
             self.val_dataset,
-            batch_size=self.DataLoader_batch_size,
             shuffle=False,
             num_workers=self.num_workers,
         )
@@ -166,31 +165,6 @@ class _hic_datamodule_pl(LightningDataModule):
     def test_dataloader(self):
         return DataLoader(
             self.test_dataset,
-            batch_size=self.DataLoader_batch_size,
             shuffle=False,
             num_workers=self.num_workers,
         )
-
-    class _dl_wrapper:
-        def __init__(self, data_loader, n_steps):
-            self.step = n_steps
-            self.idx = 0
-            self.iter_loader = iter(data_loader)
-
-        def __iter__(self):
-            return self
-
-        def __len__(self):
-            return self.step
-
-        def __next__(self):
-            if self.idx == self.step:
-                self.idx = 0
-                raise StopIteration
-            else:
-                self.idx += 1
-            try:
-                return next(self.iter_loader)
-            except StopIteration:
-                self.iter_loader = iter(self.loader)
-                return next(self.iter_loader)
