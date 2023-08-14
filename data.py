@@ -9,6 +9,10 @@ import argparse
 import tqdm
 import sys
 
+import numpy as np
+from itertools import chain
+
+
 class _hic_dataset_torch(Dataset):
     def __init__(self, pyg_dataset, args, state="train"):
         self.dataset = pyg_dataset
@@ -28,7 +32,10 @@ class _hic_dataset_torch(Dataset):
             self.dataset = [
                 self.gen_batch()
                 for i in tqdm.tqdm(
-                    range(n_step), desc=f"Generating {state} data", total=n_step, file=sys.stdout
+                    range(n_step),
+                    desc=f"Generating {state} data",
+                    total=n_step,
+                    file=sys.stdout,
                 )
             ]
 
@@ -146,7 +153,7 @@ class _hic_datamodule_pl(LightningDataModule):
 
         self.batch_size = args.batch_size
         self.num_workers = args.n_workers
-        self.args = args 
+        self.args = args
 
     def train_dataloader(self):
         return DataLoader(
@@ -168,3 +175,158 @@ class _hic_datamodule_pl(LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
         )
+
+
+class _cool_datamodule_pl(LightningDataModule):
+    def __init__(self, args):
+        super().__init__()
+        self.predict_dataset = _hic_dataset_cool(args)
+        self.num_workers = args.n_workers
+
+    def predict_dataloader(self):
+        return DataLoader(
+            self.predict_dataset,
+            shuffle=False,
+            num_workers=self.num_workers,
+        )
+
+
+class _hic_dataset_cool(Dataset):
+    def __init__(self, args):
+        self.batch_size, self.min_size, self.max_size_q, self.max_size_t = (
+            args.batch_size,
+            args.min_size,
+            args.max_size_Q,
+            args.max_size_T,
+        )
+        self.comp_names = [args.sample1, args.sample2]
+        self.comp = f"{self.comp_names[0]}_vs_{self.comp_names[1]}"
+
+        self.npz = np.load(args.npz_path)
+        self.chr_names = [file.replace(f'{args.sample1}-', '') for file in self.npz.files if args.sample1 in file]
+
+        self.files = [
+            [self.npz[file] for file in self.npz.files if args.sample1 in file],
+            [self.npz[file] for file in self.npz.files if args.sample2 in file],
+        ]
+        
+        assert len(self.files[0]) == len(self.files[1])
+        assert [file.shape for file in self.files[0]] == [
+            file.shape for file in self.files[1]
+        ]
+
+        self.loaders = self.prepare_loaders(self.files[0])
+        self.chunk_indexer = [
+            (chr_idx, chunk_idx)
+            for chr_idx, loader in enumerate(self.loaders)
+            for chunk_idx, _ in enumerate(loader)
+        ]
+
+        self.args = args
+
+    def __len__(self):
+        return len(self.chunk_indexer)
+
+    def __getitem__(self, idx):
+        chr_idx, chunk_idx = self.chunk_indexer[idx]
+        idx_list = self.loaders[chr_idx][chunk_idx]
+
+        target_matrix = self.files[0][chr_idx]
+        query_matrix = self.files[1][chr_idx]
+
+        target_graphs = utils.constGraphList(
+            matrix=target_matrix,
+            minNodes=self.min_size,
+            maxNodesT=self.max_size_t,
+            idx_list=idx_list,
+        )
+
+        query_graphs = utils.constGraphList(
+            matrix=query_matrix,
+            minNodes=self.min_size,
+            maxNodesT=self.max_size_t,
+            maxNodesQ=self.max_size_q,
+            idx_list=idx_list,
+        )
+
+        target_graphs, query_graphs, present_idx = self.check_nones(
+            target_graphs, query_graphs
+        )
+
+        chr_idx, chunk_idx = torch.tensor([chr_idx]), torch.tensor([chunk_idx])
+        if target_graphs == [] or query_graphs == []:
+            return self.dummy((chr_idx, chunk_idx, present_idx))
+
+        target_batch = self.batch_graphs(target_graphs)
+        query_batch = self.batch_graphs(query_graphs)
+
+        return (
+            target_batch.x,
+            target_batch.edge_index,
+            target_batch.edge_attr,
+            target_batch.batch,
+            query_batch.x,
+            query_batch.edge_index,
+            query_batch.edge_attr,
+            query_batch.batch,
+            chr_idx,
+            chunk_idx,
+            present_idx,
+            torch.tensor([0]),
+        )
+
+    def prepare_loaders(self, files):
+        arm_size = self.min_size // 2
+        shapes = [file.shape[0] for file in files]
+        ranges = [np.arange(arm_size, shape - arm_size) for shape in shapes]
+        idx_ = [np.arange(0, _range.shape[0], self.batch_size)[1:] for _range in ranges]
+        loaders = [np.array_split(loader, idx) for loader, idx in zip(ranges, idx_)]
+        return loaders
+
+    def flip(self):
+        self.files.reverse()
+        self.comp_names.reverse()
+        print(f"Flipped to {self.comp_names[0]}_vs_{self.comp_names[1]}")
+        self.comp = f"{self.comp_names[0]}_vs_{self.comp_names[1]}"
+
+    def dummy(self, idx_tracker):
+        x = torch.zeros(1, self.args.input_dim, dtype=torch.float32)
+        edge_index = torch.zeros(2, 1, dtype=torch.int64)
+        edge_attr = torch.zeros(1, 1, dtype=torch.float32)
+        batch = torch.zeros(1, dtype=torch.int64)
+        return (
+            x,
+            edge_index,
+            edge_attr,
+            batch,
+            x,
+            edge_index,
+            edge_attr,
+            batch,
+            idx_tracker[0],
+            idx_tracker[1],
+            idx_tracker[2],
+            torch.tensor([1]),
+        )
+
+    def batch_graphs(self, graphs):
+        batch = Batch.from_data_list(graphs)
+        batch.edge_attr = batch.edge_attr.type(torch.float32)
+        batch.x = batch.x.type(torch.float32)
+        return batch
+
+    def check_nones(self, target_graphs, query_graphs):
+        target_none_idx = [i for i, graph in enumerate(target_graphs) if graph is None]
+        query_none_idx = [i for i, graph in enumerate(query_graphs) if graph is None]
+        none_idx = list(set(target_none_idx + query_none_idx))
+        all_idx = list(range(self.batch_size))
+        present_idx = list(set(all_idx) - set(none_idx))
+
+        target_graphs = [
+            graph for i, graph in enumerate(target_graphs) if i in present_idx
+        ]
+        query_graphs = [
+            graph for i, graph in enumerate(query_graphs) if i in present_idx
+        ]
+
+        return target_graphs, query_graphs, torch.tensor(present_idx)

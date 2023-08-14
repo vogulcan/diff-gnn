@@ -1,4 +1,3 @@
-import utils
 import data
 import models
 import config
@@ -8,7 +7,7 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 
-#torch.set_float32_matmul_precision("high")
+# torch.set_float32_matmul_precision("high")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -26,13 +25,18 @@ if __name__ == "__main__":
     tb_logger = TensorBoardLogger(save_dir=args.save_path, name=f"tag{args.tag}")
 
     checkpoint = pl.callbacks.ModelCheckpoint(
-        monitor="val_acc", save_top_k=10, mode="max", save_last=True, filename="{epoch}-{val_acc:.4f}"
+        monitor="val_acc",
+        save_top_k=10,
+        mode="max",
+        save_last=True,
+        filename="{epoch}-{val_acc:.4f}",
     )
 
     plugins = []
     if args.env == "slurm":
         from pytorch_lightning.plugins.environments import SLURMEnvironment
         import signal
+
         plugins.append(SLURMEnvironment(requeue_signal=signal.SIGHUP))
 
     trainer = pl.Trainer(

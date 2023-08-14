@@ -12,6 +12,54 @@ import torch.optim as optim
 import pytorch_lightning as pl
 
 
+class pl_model_predict(pl.LightningModule):
+    def __init__(
+        self,
+        args,
+    ):
+        super().__init__()
+
+        input_dim = args.input_dim
+        hidden_dim = args.hidden_dim
+        self.emb_model = GNN_Pack(input_dim, hidden_dim, hidden_dim, args)
+        self.clf_model = nn.Sequential(nn.Linear(1, 2), nn.LogSoftmax(dim=-1))
+        self.method = args.method
+
+    def forward(self, pred):
+        return (
+            self.clf_model(self.score(pred)).argmax(dim=1)
+            if self.method == "clf"
+            else self.score(pred)
+        )
+
+    def score(self, pred):
+        emb_as, emb_bs = pred
+        e = torch.sum(
+            torch.max(torch.zeros_like(emb_as, device=emb_as.device), emb_bs - emb_as)
+            ** 2,
+            dim=1,
+        )
+        return e
+
+    def predict_step(self, data, batch_idx):
+        data = [i.squeeze(0) for i in data]
+        emb_as = self.emb_model(data[0], data[1], data[2], data[3])
+        emb_bs = self.emb_model(data[4], data[5], data[6], data[7])
+        pred = (emb_as, emb_bs)
+        pred = self(pred)
+
+        chr_idx = data[8]
+        chunk_idx = data[9]
+        present_idx = data[10]
+        dummy = data[11]
+
+        return {
+            "pred": pred,
+            "metadata": [chr_idx, chunk_idx, present_idx],
+            "dummy": dummy,
+        }
+
+
 class pl_model(pl.LightningModule):
     def __init__(
         self,
@@ -105,7 +153,7 @@ class pl_model(pl.LightningModule):
         self.log(
             "train_acc", self.train_acc, prog_bar=True, on_step=True, on_epoch=True
         )
-        self.logger.experiment.add_scalar(f'train_loss', loss.item(), self.global_step)
+        self.logger.experiment.add_scalar(f"train_loss", loss.item(), self.global_step)
 
     def _shared_step(self, data):
         data = [i.squeeze(0) for i in data]
@@ -118,7 +166,7 @@ class pl_model(pl.LightningModule):
         )
         raw_pred = self.predict(self(emb_as, emb_bs))
         pred = self.clf_model(raw_pred.unsqueeze(1)).argmax(dim=-1)
-        return pred, raw_pred*-1, labels
+        return pred, raw_pred * -1, labels
 
     def validation_step(self, data, batch_idx):
         pred, raw_pred, labels = self._shared_step(data)
@@ -133,21 +181,23 @@ class pl_model(pl.LightningModule):
         self.test_step_outputs["labels"].append(labels.cpu())
 
     def _shared_compute_metrics(self, outputs, state):
-        pred = torch.cat(outputs['pred'], dim=-1)
-        labels = torch.cat(outputs['labels'], dim=-1)
-        raw_pred = torch.cat(outputs['raw_pred'], dim=-1)
-        
-        if state == 'val':
+        pred = torch.cat(outputs["pred"], dim=-1)
+        labels = torch.cat(outputs["labels"], dim=-1)
+        raw_pred = torch.cat(outputs["raw_pred"], dim=-1)
+
+        if state == "val":
             self.val_acc(pred, labels)
-            self.log("val_acc", self.val_acc, prog_bar=True, on_step=False, on_epoch=True)
+            self.log(
+                "val_acc", self.val_acc, prog_bar=True, on_step=False, on_epoch=True
+            )
             acc = self.val_acc.compute()
         else:
             acc = torch.mean((pred == labels).type(torch.float))
-        
+
         prec = (
-        torch.sum(pred * labels).item() / torch.sum(pred).item()
-        if torch.sum(pred) > 0
-        else float("NaN")
+            torch.sum(pred * labels).item() / torch.sum(pred).item()
+            if torch.sum(pred) > 0
+            else float("NaN")
         )
         recall = (
             torch.sum(pred * labels).item() / torch.sum(labels).item()
@@ -158,20 +208,30 @@ class pl_model(pl.LightningModule):
         avg_prec = average_precision_score(labels, raw_pred)
         tn, fp, fn, tp = confusion_matrix(labels, pred).ravel()
 
-        metrics = {'acc': acc, 'prec': prec, 'recall': recall, 'auroc': auroc, 'avg_prec': avg_prec, 'tn': tn, 'fp': fp, 'fn': fn, 'tp': tp}
-        
+        metrics = {
+            "acc": acc,
+            "prec": prec,
+            "recall": recall,
+            "auroc": auroc,
+            "avg_prec": avg_prec,
+            "tn": tn,
+            "fp": fp,
+            "fn": fn,
+            "tp": tp,
+        }
+
         for k, v in metrics.items():
             if k == "val_acc":
                 continue
             else:
-                self.logger.experiment.add_scalar(f'{state}_{k}', v, self.current_epoch)
+                self.logger.experiment.add_scalar(f"{state}_{k}", v, self.current_epoch)
 
     def on_validation_epoch_end(self):
-        self._shared_compute_metrics(self.validation_step_outputs, 'val')
+        self._shared_compute_metrics(self.validation_step_outputs, "val")
         self.validation_step_outputs = {"pred": [], "raw_pred": [], "labels": []}
-    
+
     def on_test_epoch_end(self):
-        self._shared_compute_metrics(self.test_step_outputs, 'test')
+        self._shared_compute_metrics(self.test_step_outputs, "test")
         self.test_step_outputs = {"pred": [], "raw_pred": [], "labels": []}
 
     def configure_optimizers(self):
