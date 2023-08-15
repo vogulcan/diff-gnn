@@ -9,6 +9,9 @@ from models import pl_model_predict
 
 import pandas as pd
 import numpy as np
+import bioframe as bf
+
+#torch.set_float32_matmul_precision('medium')
 
 # from pytorch_lightning.callbacks import BasePredictionWriter
 # class CustomWriter(BasePredictionWriter):
@@ -56,42 +59,92 @@ if __name__ == "__main__":
 
     chr_names = comp_data_module.predict_dataset.chr_names
     loaders = comp_data_module.predict_dataset.loaders
+    resolution = hyper_parameters['args'].resolution
+    batch_size = hyper_parameters['args'].batch_size
 
-    res_df = {'chr': [], 'start': [], 'end': [], comps[0]: [], comps[1]: [], f'{comps[0]}-clf': [], f'{comps[1]}-clf': []}
+    comps = list(outputs.keys())
+    res_df = {
+        'chr': [], 
+        'start': [], 
+        'end': [], 
+        comps[0]: [], 
+        comps[1]: [], 
+        f'{comps[0]}-clf': [], 
+        f'{comps[1]}-clf': []
+        }
 
-for res1, res2 in zip(outputs[comps[0]], outputs[comps[1]]):
+    
+    hg38_chromsizes = bf.fetch_chromsizes('hg38')
+    hg38_cens = bf.fetch_centromeres('hg38')
+    hg38_arms = bf.make_chromarms(hg38_chromsizes,  hg38_cens)
+    hg38_arms = hg38_arms.reset_index(drop=True)
 
-    pred1, pred2 = res1['pred'], res2['pred']
-    meta1, meta2 = res1['metadata'], res2['metadata']
-    dummy1, dummy2 = res1['dummy'], res2['dummy']
+    df_list = []
+    for chrname in chr_names:
+        start = int(hg38_arms[hg38_arms['name'] == chrname]['start'].iloc[0])
+        end = int(hg38_arms[hg38_arms['name'] == chrname]['end'].iloc[0])
+        df_local = {'chr': [], 'start': [], 'end': [], 'name': []}
 
-    assert meta1[0] == meta2[0]
-    assert meta1[1] == meta2[1]
+        start_bin = start // resolution
+        end_bin = end // resolution + 1
 
-    if dummy1 or dummy2:
-        continue
-    else:
-        common_idx = [int(i) for i in meta1[2] if i in meta2[2]]
-        common_1 = sum(meta1[2]==i for i in common_idx).bool()
-        common_2 = sum(meta2[2]==i for i in common_idx).bool()
+        if start_bin != 0:
+            start_bin += 1
+            end_bin += 1
 
-        pred1, pred2 = pred1[common_1], pred2[common_2]
+        df_local['start'] = np.array(range(start_bin, end_bin)) * resolution
+        df_local['chr'] = [chrname.split('_')[0]] * len(df_local['start'])
+        df_local['end'] = df_local['start'] + resolution
+        df_local['name'] = [chrname] * len(df_local['start'])
+        df_local[comps[0]] = np.nan * np.zeros(len(df_local['start']))
+        df_local[comps[1]] = np.nan * np.zeros(len(df_local['start']))
+        df_local[f'{comps[0]}-clf'] = np.nan * np.zeros(len(df_local['start']))
+        df_local[f'{comps[1]}-clf'] = np.nan * np.zeros(len(df_local['start']))
+        df_list.append(pd.DataFrame(df_local))
 
-        chr_idx, chunk_idx = meta1[0], meta1[1]
-        chr_name = chr_names[chr_idx]
-        coords_idx = loaders[chr_idx][chunk_idx]
-        start_coord = int(chunk_idx * hyper_parameters['args'].batch_size * 10000)
-        coords = np.array(coords_idx)[common_idx]
-        coords *= 10000
-        coords += start_coord
+    df = pd.concat(df_list, ignore_index=True)
 
-        res_df['chr'].extend([chr_name] * len(coords))
-        res_df['start'].extend(coords.tolist())
-        res_df['end'].extend((coords + 10000).tolist())
-        res_df[comps[0]].extend(pred1.tolist())
-        res_df[comps[1]].extend(pred2.tolist())
-        res_df[f'{comps[0]}-clf'].extend(model.clf_model(pred1).argmax(1).detach().numpy().tolist())
-        res_df[f'{comps[1]}-clf'].extend(model.clf_model(pred2).argmax(1).detach().numpy().tolist())
+    def holder(batch_size, pred, present_both):
+        holder = np.nan * np.zeros((batch_size))
+        holder[present_both] = pred
+        return holder.copy()    
 
-    res_df = pd.DataFrame(res_df)
-    res_df.to_csv(hyper_parameters['args'].res_path, index=False, sep='\t')
+    for i, (res1, res2) in enumerate(zip(outputs[comps[0]], outputs[comps[1]])):
+
+        pred1, pred2 = res1['pred'], res2['pred']
+        meta1, meta2 = res1['metadata'], res2['metadata']
+        dummy1, dummy2 = res1['dummy'], res2['dummy']
+
+        assert meta1[0] == meta2[0]
+        assert meta1[1] == meta2[1]
+
+        if dummy1 or dummy2:
+            continue
+        else:
+            
+            present_both = [int(i) for i in meta1[2] if i in meta2[2]]
+            pred1, pred2 = pred1[sum(meta1[2]==i for i in present_both).bool()], pred2[sum(meta2[2]==i for i in present_both).bool()]
+            pred1 = holder(batch_size, pred1, present_both)
+            pred2 = holder(batch_size, pred2, present_both)
+
+            chr_idx, chunk_idx = meta1[0], meta1[1]
+            current_start = int(chunk_idx * batch_size)
+            current_present = np.array(present_both) + current_start
+
+            chr_name = chr_names[chr_idx]
+            start_index = df[df['name'] == chr_name].index[0]
+            start_index += current_start
+
+            clf1 = model.clf_model(torch.tensor(pred1, dtype=torch.float32).reshape(-1, 1)).argmax(1).detach().numpy()
+            clf2 = model.clf_model(torch.tensor(pred2, dtype=torch.float32).reshape(-1, 1)).argmax(1).detach().numpy()
+            
+            size = batch_size
+            if chunk_idx + 1 == len(loaders[chr_idx]):
+                size = df.iloc[start_index:, :].shape[0]
+
+            df.iloc[start_index:start_index+batch_size, 4] = pred1[:size]
+            df.iloc[start_index:start_index+batch_size, 5] = pred2[:size]
+            df.iloc[start_index:start_index+batch_size, 6] = clf1[:size]
+            df.iloc[start_index:start_index+batch_size, 7] = clf2[:size]
+
+    df.to_csv(predict_args.results_save, sep='\t', index=False)

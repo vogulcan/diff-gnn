@@ -128,9 +128,11 @@ def parse_predict(parser):
 
     predict_parser.add_argument("--sample1", type=str, help="Sample 1")
     predict_parser.add_argument("--sample2", type=str, help="Sample 2")
-
+    predict_parser.add_argument("--results_save", type=str, help="Results path")
     predict_parser.add_argument("--n_workers", type=int, help="Number of workers")
-    predict_parser.set_defaults(method="raw", batch_size=512, n_workers=8)
+    predict_parser.add_argument("--resolution", type=int, help="Resolution")
+
+    predict_parser.set_defaults(method="raw", batch_size=512, n_workers=8, resolution=10000)
 
 
 def merge_args(*args):

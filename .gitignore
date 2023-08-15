@@ -1,10 +1,6 @@
-/__pycache__
+/checkpoints
 /datasets
-/runs
-/test-explain
-/checkpoints
-/analyze
-/lightning_logs
-/logs
-/checkpoints
 /experiments
+/lightning_logs
+/__pycache__
+/analyze

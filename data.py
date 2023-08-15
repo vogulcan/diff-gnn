@@ -200,11 +200,13 @@ class _hic_dataset_cool(Dataset):
             args.max_size_T,
         )
         self.comp_names = [args.sample1, args.sample2]
-        self.comp = f"{self.comp_names[0]}_vs_{self.comp_names[1]}"
+        self.comp = f"{self.comp_names[0]}-{self.comp_names[1]}"
 
         self.npz = np.load(args.npz_path)
         self.chr_names = [file.replace(f'{args.sample1}-', '') for file in self.npz.files if args.sample1 in file]
-
+        
+        assert self.chr_names == [file.replace(f'{args.sample2}-', '') for file in self.npz.files if args.sample2 in file]
+        
         self.files = [
             [self.npz[file] for file in self.npz.files if args.sample1 in file],
             [self.npz[file] for file in self.npz.files if args.sample2 in file],
@@ -278,7 +280,10 @@ class _hic_dataset_cool(Dataset):
     def prepare_loaders(self, files):
         arm_size = self.min_size // 2
         shapes = [file.shape[0] for file in files]
-        ranges = [np.arange(arm_size, shape - arm_size) for shape in shapes]
+        #ranges = [np.arange(arm_size, shape - arm_size) for shape in shapes]
+        
+        ranges = [np.arange(0, shape) for shape in shapes]
+        
         idx_ = [np.arange(0, _range.shape[0], self.batch_size)[1:] for _range in ranges]
         loaders = [np.array_split(loader, idx) for loader, idx in zip(ranges, idx_)]
         return loaders
@@ -286,8 +291,8 @@ class _hic_dataset_cool(Dataset):
     def flip(self):
         self.files.reverse()
         self.comp_names.reverse()
-        print(f"Flipped to {self.comp_names[0]}_vs_{self.comp_names[1]}")
-        self.comp = f"{self.comp_names[0]}_vs_{self.comp_names[1]}"
+        print(f"Flipped to {self.comp_names[0]} vs {self.comp_names[1]}")
+        self.comp = f"{self.comp_names[0]}-{self.comp_names[1]}"
 
     def dummy(self, idx_tracker):
         x = torch.zeros(1, self.args.input_dim, dtype=torch.float32)
@@ -316,17 +321,14 @@ class _hic_dataset_cool(Dataset):
         return batch
 
     def check_nones(self, target_graphs, query_graphs):
-        target_none_idx = [i for i, graph in enumerate(target_graphs) if graph is None]
-        query_none_idx = [i for i, graph in enumerate(query_graphs) if graph is None]
-        none_idx = list(set(target_none_idx + query_none_idx))
-        all_idx = list(range(self.batch_size))
-        present_idx = list(set(all_idx) - set(none_idx))
-
-        target_graphs = [
-            graph for i, graph in enumerate(target_graphs) if i in present_idx
-        ]
-        query_graphs = [
-            graph for i, graph in enumerate(query_graphs) if i in present_idx
-        ]
-
-        return target_graphs, query_graphs, torch.tensor(present_idx)
+        t_list, q_list, present_idx = [], [], []
+        assert len(target_graphs) == len(query_graphs)
+        for i, (t, q) in enumerate(zip(target_graphs, query_graphs)):
+            if t is None or q is None:
+                continue
+            else:
+                t_list.append(t)
+                q_list.append(q)
+                present_idx.append(i)
+        assert len(t_list) == len(q_list) == len(present_idx)
+        return t_list, q_list, torch.tensor(present_idx)
